@@ -1,33 +1,28 @@
-# =========================
-# Makefile for makeHists
-# =========================
+#----------------------------------------------
+#  Makefile for FlatnessScan
+#  Author: Luciano Ristori
+#----------------------------------------------
 
 # Compiler and flags
-CXX = g++
-CXXFLAGS = -std=c++17 -O2 -Wall -mmacosx-version-min=13.0
+CXX      := clang++
+CXXFLAGS := -std=c++17 -O2 -Wall -mmacosx-version-min=13.0
+ROOTFLAGS := $(shell root-config --cflags --libs)
 
-# ROOT flags
-ROOTCFLAGS = `root-config --cflags`
-ROOTLIBS   = `root-config --libs`
+# Sources and executable
+SOURCES  := flatnessScan.cpp Points.cpp
+TARGET   := flatnessScan
 
-# Source files
-SRCS = flatnessScan.cpp Points.cpp
-OBJS = $(SRCS:.cpp=.o)
-
-# Target executable
-TARGET = flatnessScan
-
-# Default target
+#----------------------------------------------
 all: $(TARGET)
 
-# Link step
-$(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(ROOTLIBS)
+$(TARGET): $(SOURCES)
+	$(CXX) $(CXXFLAGS) $(SOURCES) -o $(TARGET) $(ROOTFLAGS)
 
-# Compile step
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< $(ROOTCFLAGS)
-
-# Clean
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(TARGET) *.o
+
+#----------------------------------------------
+# Usage:
+#   make        -> build the program
+#   make clean  -> remove executable and object files
+#----------------------------------------------

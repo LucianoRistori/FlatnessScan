@@ -1,5 +1,7 @@
 # FlatnessScan
 
+branch gridFinder
+
 **FlatnessScan** is a C++ program for analyzing geometric or detector-related data to study surface or alignment flatness.  
 It reads point data from input files, performs statistical analysis, and can produce ROOT histograms or summary outputs.
 
