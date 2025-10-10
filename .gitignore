@@ -1,0 +1,62 @@
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.Spotlight-V100
+.Trashes
+Icon?
+._*
+
+# --- C/C++ build artifacts ---
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.d
+*.gch
+*.pch
+
+# --- Executables / bundles ---
+*.exe
+*.out
+*.app
+*.dSYM/
+
+# --- Coverage / profiling ---
+*.gcno
+*.gcda
+*.gcov
+*.prof
+*.profraw
+*.profdata
+
+# --- CMake ---
+build/
+build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+
+# --- Make ---
+*.dep
+
+# --- ROOT ---
+*.root
+*.pcm
+
+# --- IDEs / editors (uncomment if you use them) ---
+#.vscode/
+#.idea/
+#*.iml
+#*.swp
+#*~
+#*.code-workspace
+
+# --- Xcode (uncomment if you generate Xcode projects) ---
+#*.xcodeproj/*
+#*.xcworkspace/*
+#*.xcuserdata/
