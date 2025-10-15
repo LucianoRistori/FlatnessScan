@@ -1,4 +1,6 @@
-
+//
+// Build:  clang++ -std=c++17 flatnessScan.cpp Points.cpp `root-config --cflags --libs` -o flatnessScan
+//
 //------------------------------------------------------------------------------
 // File: flatnessScan.cpp
 //
@@ -26,8 +28,10 @@
 //        deviation of each point from the fitted plane.
 //     6. Produces a 2D scatter plot of Y vs. X and displays all histograms
 //        and the scatter plot in interactive ROOT canvases.
-//     7. Writes all histograms and the TGraph to an output ROOT file
-//        ("output.root").
+//     7. Detects whether the data lie on a regular (Nx × Ny) grid. If so,
+//        constructs a 2D “flatness map” histogram colored by Z values.
+//     8. Writes all histograms and the TGraph to an output ROOT file
+//        ("output.root") and displays all results.
 //
 // Input:
 //   A text file (e.g. "points.csv") with four columns per line:
@@ -42,19 +46,16 @@
 //   $ ./flatnessScan my_points.csv
 //
 // Dependencies:
-//   - ROOT framework (TFile, TH1D, TGraph, TCanvas, TApplication, Minimizer)
+//   - ROOT framework (TFile, TH1D, TH2D, TGraph, TCanvas, TApplication, Minimizer)
 //   - Points.h / Points.cpp for reading input data
+//   - GridFinder.h for grid detection
 //
 // Author: Luciano Ristori
 // Version: 1.0
 // Date: October 2025
 //------------------------------------------------------------------------------
 
-// This program depends on the ROOT framework for histogramming, fitting,
-// and visualization. It also uses the 'Points' module for reading 3D data files.
-
-//------------------------------------------------------------------------------
-
+// ROOT and standard headers
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -62,6 +63,8 @@
 #include <vector>
 #include <cstdlib>
 #include <limits>
+#include <iomanip>
+#include <cmath>
 
 #include "TFile.h"
 #include "TH1D.h"
@@ -70,437 +73,354 @@
 #include "TApplication.h"
 #include "TROOT.h"
 #include "TGraph.h"
-
+#include "TStyle.h"
+#include "TColor.h"
 
 #include "Math/Minimizer.h"
 #include "Math/Factory.h"
 #include "Math/Functor.h"
 
 #include "Points.h"
+#include "GridFinder.h"
 
-// This program depends on the ROOT framework for histogramming, fitting,
-// and visualization. It also uses the 'Points' module for reading 3D data files.
+//------------------------------------------------------------------------------
+// Program version (update when functionality changes)
+const std::string FLATNESS_SCAN_VERSION = "1.1.0 (October 2025)";
 
 
 using std::cout;
-using  std::endl;
-using  std::vector;
+using std::endl;
+using std::vector;
 
+std::vector<double> X, Y, Z;
+double offset = 400.0;
 
-// Global vectors storing coordinate components, used by the minimization function.
-// These are filled in main() after reading the input points.
-
-
-//std::vector<Point> points;
-vector<double> X, Y, Z;
-
-double offset = 400.;
-
-////////////////////////////////////////////////////////////////////////////////////
-// RAII helper class to temporarily set scientific notation and precision for console output.
+//------------------------------------------------------------------------------
+// Helper classes for formatted console output
+//------------------------------------------------------------------------------
 
 class ScientificPrecision {
-
 public:
-
-	// Constructor saves current format and applies scientific formatting.
     ScientificPrecision(std::ostream& os, int precision)
         : os_(os), old_precision_(os.precision()), old_flags_(os.flags()) {
         os_ << std::scientific << std::setprecision(precision);
     }
-    
-    // Destructor restores original stream settings automatically.
     ~ScientificPrecision() {
         os_.precision(old_precision_);
         os_.flags(old_flags_);
     }
-
-    ScientificPrecision(const ScientificPrecision&) = delete;
-    ScientificPrecision& operator=(const ScientificPrecision&) = delete;
-
 private:
     std::ostream& os_;
     std::streamsize old_precision_;
     std::ios_base::fmtflags old_flags_;
 };
-/*
-
-// Usage example
-
-int main() {
-    double value = 3.14159265359;
-
-    std::cout << "Default notation: " << value << std::endl;
-
-    {
-        ScientificPrecision sp(std::cout, 4);
-        std::cout << "Scientific notation with precision 4: " << value << std::endl;
-    }
-
-    std::cout << "Default notation restored: " << value << std::endl;
-
-    return 0;
-}
-*/
-
-////////////////////////////////////////////////////////////////////////////////////
-// RAII helper class to temporarily set floating point precision for console output.
 
 class FloatingPointPrecision {
-
 public:
-
-	// Constructor saves current format and applies floating point precision. 
     FloatingPointPrecision(std::ostream& os, int precision)
         : os_(os), old_precision_(os.precision()) {
         os_ << std::setprecision(precision);
     }
-    
-    // Destructor restores original stream settings automatically.
     ~FloatingPointPrecision() {
         os_.precision(old_precision_);
     }
-
-    FloatingPointPrecision(const FloatingPointPrecision&) = delete;
-    FloatingPointPrecision& operator=(const FloatingPointPrecision&) = delete;
-
 private:
     std::ostream& os_;
     std::streamsize old_precision_;
 };
 
-/*
+//------------------------------------------------------------------------------
+// χ² Function for plane fitting
+//------------------------------------------------------------------------------
 
-// usage example
+double chi2Func(const double *x) {
+    double ax = x[0], ay = x[1], az = x[2];
+    double chi2 = 0.0;
 
-int main() {
-    double value = 3.14159265359;
-
-    std::cout << "Default precision: " << value << std::endl;
-
-    {
-        FloatingPointPrecision fpp(std::cout, 4);
-        std::cout << "Precision 4: " << value << std::endl;
+    for (size_t i = 0; i < X.size(); ++i) {
+        double delta = ax*X[i] + ay*Y[i] + az*(Z[i] + offset) - 1.0;
+        chi2 += delta * delta / (ax*ax + ay*ay + az*az);
     }
-
-    std::cout << "Default precision restored: " << value << std::endl;
-
-    return 0;
+    return chi2;
 }
-*/
 
-
-////////////////////////////////////////////////////////////////////////////////////
-// chi2Func()
-// Computes the chi-square value for the given plane parameters (ax, ay, az).
-// The function is minimized by the ROOT Minuit2 optimizer to find the best-fit plane.
-
-double chi2Func(const double *x){
-	 	   	       	
-	 double ax = x[0]; 
-	 double ay = x[1];
-	 double az = x[2]; 
-	 
-	double chi2 = 0.;
-	
-	// For each point, compute the signed distance from the trial plane and accumulate chi².
-
-	for(int i = 0; i != (int)X.size(); ++i) {	
-		double delta = ax*X[i]+ay*Y[i]+az*(Z[i]+offset) - 1.;
-		chi2 += delta*delta/(ax*ax+ay*ay+az*az);
-	}
-	
-	return chi2;
-
-}// end chi2Func
-
-////////////////////////////////////////////////////////////////////////////////////
-
-
-
+//------------------------------------------------------------------------------
+// Main program
+//------------------------------------------------------------------------------
 
 int main(int argc, char *argv[]) {
 
-
+// Usage:
+//
+//   ./flatnessScan input.csv [output.root]
+//
+//------------------------------------------------------------------------------
 // 1. Parse command-line arguments and initialize ROOT application.
- 
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " input.csv" << std::endl;
-        return 1;
-    }
+//------------------------------------------------------------------------------
+////
+// If no output file is specified, defaults to "output.root".
+// If the name given does not end with ".root", the extension is added automatically.
+//
 
-    std::string filename = argv[1];
+	if (argc < 2) {
+		std::cerr << "Usage: " << argv[0] << " input.csv [output.root]" << std::endl;
+		return 1;
+	}
+	
+	std::cout << "\nFlatnessScan version " << FLATNESS_SCAN_VERSION << std::endl;
 
- 	TApplication app("app", &argc, argv);  // Initialize ROOT GUI 	
-    gROOT->SetBatch(false); // enable GUI
-    TH1::AddDirectory(kTRUE);
+	std::string filename = argv[1];
+	std::string outname = (argc >= 3) ? argv[2] : "output.root";
 
+	// Append ".root" if missing (case-insensitive)
+	if (outname.size() < 5 || 
+		(outname.substr(outname.size() - 5) != ".root" &&
+		 outname.substr(outname.size() - 5) != ".ROOT")) {
+		outname += ".root";
+	}
 
-// 2. Read 3D points from input file (see Points.cpp for parser details).
+	// Initialize ROOT GUI
+	TApplication app("app", &argc, argv);
+	gROOT->SetBatch(false); // enable GUI
+	TH1::AddDirectory(kTRUE);
 
-    int n = 4; // >= 4 numbers expected on each line
+    // 2. Read 3D points from input file
     
+    int n = 4;
     std::vector<Point> points = readPoints(filename, n);
-
     if (points.empty()) {
         std::cerr << "No valid points found. Exiting." << std::endl;
         return 1;
     }
-    
-// 3. Fill global coordinate vectors (X, Y, Z) used in the fit function.
-  
-    for(int iPoint = 0; iPoint != (int)points.size(); ++iPoint){
-    	X.push_back(points[iPoint].coords[1]);
-    	Y.push_back(points[iPoint].coords[2]);
-    	Z.push_back(points[iPoint].coords[3]);   
+
+    for (auto &p : points) {
+        X.push_back(p.coords[1]);
+        Y.push_back(p.coords[2]);
+        Z.push_back(p.coords[3]);
     }
-    std::cout << "Read " << points.size() << " valid points with "
-              << n << " coordinates each." << std::endl;
-              
-              
 
-// 4. Configure and run ROOT's Minuit2 minimizer to fit a 3D plane.
+    cout << "Read " << points.size() << " valid points." << endl;
 
-	cout << "\n Fitting 3D plane..." << endl;
+    // 3. Fit a 3D plane using Minuit2
+    
+    cout << "\nFitting 3D plane..." << endl;
+    ROOT::Math::Minimizer* min =
+        ROOT::Math::Factory::CreateMinimizer("Minuit2", "");
 
-	// create minimizer giving a name and a name (optionally) for the specific
-	// algorithm
-	// possible choices are: 
-	//     minName                  algoName
-	// Minuit /Minuit2             Migrad, Simplex,Combined,Scan  (default is Migrad)
-	//  Minuit2                     Fumili2
-	//  Fumili
-	//  GSLMultiMin                ConjugateFR, ConjugatePR, BFGS, 
-	//                              BFGS2, SteepestDescent
-	//  GSLMultiFit
-	//   GSLSimAn xxx problems
-	//   Genetic
+    min->SetMaxFunctionCalls(1000000);
+    min->SetMaxIterations(1000);
+    min->SetTolerance(0.001);
+    min->SetPrintLevel(0);
 
-	const char * minName = "Minuit2";
-	const char *algoName = "";
+    ROOT::Math::Functor f(&chi2Func, 3);
+    double step[3] = {0.001, 0.001, 0.001};
+    double variable[3] = {0.0, 0.0, 1.0 / offset};
+    min->SetFunction(f);
 
-	ROOT::Math::Minimizer* min = 
-	  ROOT::Math::Factory::CreateMinimizer(minName, algoName);
-	
-		// set tolerance , etc...
-		min->SetMaxFunctionCalls(1000000); // for Minuit/Minuit2 
-		min->SetMaxIterations(1000);  // for GSL 
-		min->SetTolerance(0.001);
-		min->SetPrintLevel(0);
+    min->SetVariable(0, "ax", variable[0], step[0]);
+    min->SetVariable(1, "ay", variable[1], step[1]);
+    min->SetVariable(2, "az", variable[2], step[2]);
+    min->Minimize();
 
-		// create function wrapper for minmizer
-		// a IMultiGenFunction type 
-		ROOT::Math::Functor f(&chi2Func,3); 
-		double step[3] = {0.001,0.001,0.001};
-		
-		
-		double variable[3] = {0.,0.,1./offset};
-		
-		
-		 min->SetFunction(f);
-					
-		 
-		// Set the free variables to be minimized!
+    const double *res = min->X();
+    const double *err = min->Errors();
 
-		min->SetVariable(0,"ax",variable[0], step[0]);
-		min->SetVariable(1,"ay",variable[1], step[1]);
-		min->SetVariable(2,"az",variable[2], step[2]);
-		
-		 // do the minimization 
-				
-		min->Minimize(); 
-		
-// 5. Retrieve fit results and compute derived quantities (σ, |a|, etc.).
+    double ax = res[0], ay = res[1], az = res[2];
+    double ax_e = err[0], ay_e = err[1], az_e = err[2];
+    double minChi2 = min->MinValue();
 
-		const double *res = min->X();
-		const double *err = min->Errors();
-				
-		// return parameters f
-		
-		double minChi2 = min->MinValue(); 
-		double ax = res[0];
-		double ay = res[1];
-		double az = res[2];
-		
-		double ax_e = err[0];
-		double ay_e = err[1];
-		double az_e = err[2];
-		
-		// print results
-		
-		{
-		ScientificPrecision sp(cout, 2);	
-		
-		std::cout << "\n----------------------------------\n";
-		std::cout << "  Plane fit summary\n";
-		std::cout << "  ax = " << ax << " ± " << ax_e << "\n";
-		std::cout << "  ay = " << ay << " ± " << ay_e << "\n";
-		std::cout << "  az = " << az << " ± " << az_e << "\n";
-		}
-		
-		{
-        FloatingPointPrecision fpp(std::cout, 4);
-		std::cout << "  σ = " << 1000.*sqrt(minChi2 / X.size()) << " µm\n";
-		std::cout << "----------------------------------\n";
-		}
-		
-		// Modulus of a
-		
-		double moda = sqrt(ax*ax+ay*ay+az*az);
-		
-		cout << "\nModulus of a: " << moda << endl;
-		
-		// Inverse modulus
-		
-		double invModa = 1./moda;
-		
-		cout << "Inverse modulus of a: " << invModa << " [mm]" << endl;
-		
-		cout << "Offset: " << offset << " [mm]" << endl;
-		
-		
-//////////////////////////////////////////////////////////////////////////////////////				
+    {
+        ScientificPrecision sp(cout, 2);
+        cout << "\n----------------------------------\n";
+        cout << "  Plane fit summary\n";
+        cout << "  ax = " << ax << " ± " << ax_e << "\n";
+        cout << "  ay = " << ay << " ± " << ay_e << "\n";
+        cout << "  az = " << az << " ± " << az_e << "\n";
+    }
 
-// 6. Determine coordinate ranges for histogram axis scaling.
+    {
+        FloatingPointPrecision fpp(cout, 4);
+        cout << "  σ = " << 1000. * sqrt(minChi2 / X.size()) << " µm\n";
+        cout << "----------------------------------\n";
+    }
 
+    double moda = sqrt(ax*ax + ay*ay + az*az);
+    double invModa = 1.0 / moda;
+    cout << "\n|a| = " << moda << "   1/|a| = " << invModa << " [mm]" << endl;
+    cout << "Offset: " << offset << " [mm]" << endl;
+
+    // 4. Determine coordinate ranges
+    
     std::vector<double> mins(n, std::numeric_limits<double>::max());
     std::vector<double> maxs(n, std::numeric_limits<double>::lowest());
-
-    for (const auto &p : points) {
+    for (const auto &p : points)
         for (int i = 0; i < n; ++i) {
             if (p.coords[i] < mins[i]) mins[i] = p.coords[i];
             if (p.coords[i] > maxs[i]) maxs[i] = p.coords[i];
         }
-    }
-    
-    
-// 7. Create and fill histograms for X, Y, Z, and residuals from plane fit.
 
-    // Create output ROOT file
-    
-    std::string outname = "output.root";
+	// 5. Create histograms for X, Y, Z, and residuals
+	//    → Provides coordinate distributions and flatness residuals for visualization
+
     TFile outfile(outname.c_str(), "RECREATE");
 
-    // Automatically determine histogram binning and range for each coordinate.
-	// Adds a 50% margin to ensure all points fall comfortably inside the histogram range.
-    
     std::vector<TH1D*> hists;
+
     for (int i = 0; i < n; ++i) {
-        double min = mins[i];
-        double max = maxs[i];
-        if (min == max) {
-            min -= 0.5;
-            max += 0.5;
-        }
-        double margin = 0.5 * (max - min); // 50% margin
-        int nBins = static_cast<int>((max - min + 2*margin) * 1000 + 0.5);  // round to nearest int
-        std::string hname = "hCoord" + std::to_string(i+1);
-        std::string htitle = "Coordinate " + std::to_string(i+1);
-        hists.push_back(new TH1D(hname.c_str(), htitle.c_str(),
-                                 nBins, min - margin, max + margin));
-        if(i == 3){// this is Z
-        	hname = "Deviations";
-        	htitle = "Deviations from 3D plane fit";
-        	hists.push_back(new TH1D(hname.c_str(), htitle.c_str(),
-                                 nBins, min - margin, max + margin));                               
+        double min = mins[i], max = maxs[i];
+        if (min == max) { min -= 0.5; max += 0.5; }
+        double margin = 0.5 * (max - min);
+        int nBins = static_cast<int>((max - min + 2 * margin) * 1000 + 0.5);
+
+        std::string hname, htitle, xaxis;
+        
+        if (i == 0) { hname = "hn"; htitle = "Point sequence number"; xaxis = "n"; }
+        else if (i == 1) { hname = "hX"; htitle = "X Coordinate Distribution"; xaxis = "X [mm]"; }
+        else if (i == 2) { hname = "hY"; htitle = "Y Coordinate Distribution"; xaxis = "Y [mm]"; }
+        else if (i == 3) { hname = "hZ"; htitle = "Z Coordinate Distribution"; xaxis = "Z [mm]"; }
+        else { hname = "hCoord" + std::to_string(i + 1); htitle = "Coordinate " + std::to_string(i + 1); xaxis = "Value"; }
+
+        auto *h = new TH1D(hname.c_str(), htitle.c_str(),
+                           nBins, min - margin, max + margin);
+        h->GetXaxis()->SetTitle(xaxis.c_str());
+        h->GetYaxis()->SetTitle("Counts");
+        hists.push_back(h);
+
+		// For Z coordinate (i == 3), also create a second histogram
+    	// to store residuals (deviations from the fitted 3D plane).
+        if (i == 3) {
+            auto *hDev = new TH1D("hDeviations", "Deviations from 3D Plane Fit",
+                                  nBins, min - margin, max + margin);
+            hDev->GetXaxis()->SetTitle("Residual [mm]");
+            hDev->GetYaxis()->SetTitle("Counts");
+            hists.push_back(hDev);
         }
     }
-    
-	cout << "nHists = " << hists.size() << endl;
 
-    // Fill histograms
     for (const auto &p : points) {
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i)
             hists[i]->Fill(p.coords[i]);
-        }
-        // Compute perpendicular deviation (signed distance) of each point from the best-fit plane.
-		double delta = (ax*p.coords[1]+ay*p.coords[2]+az*(p.coords[3]+offset) -1.)*invModa;
+        double delta = (ax*p.coords[1] + ay*p.coords[2] + az*(p.coords[3] + offset) - 1.0) * invModa;
         hists[4]->Fill(delta);
     }
+    
+    // write code version to histogram file
+    
+    TNamed versionTag("FlatnessScanVersion", FLATNESS_SCAN_VERSION.c_str());
+	versionTag.Write();
 
-    // Write to file
-    for (auto h : hists) {
-        h->Write();
+    for (auto h : hists) h->Write();
+
+    // 6. 2D Scatter plot of Y vs X
+    
+    TGraph* g2 = new TGraph(points.size());
+    for (size_t i = 0; i < points.size(); ++i)
+    g2->SetPoint(i, points[i].coords[1], points[i].coords[2]);
+    g2->SetName("g2_xy");
+    g2->SetTitle("Y vs X");
+    g2->Write();
+
+    // 7. Flatness color map if grid is regular
+    
+    std::vector<std::pair<double,double>> xy;
+    xy.reserve(points.size());
+    for (const auto &p : points)
+        xy.emplace_back(p.coords[1], p.coords[2]);
+        
+    // Analyze (X, Y) points to determine if they form a regular Nx×Ny grid.
+	// If yes, create a color-coded 2D histogram of Z values — the "flatness map".
+
+    auto grid = GridFinder::analyze(xy);
+    TH2D *hZ = nullptr;
+
+    if (grid.regularX && grid.regularY) {
+        hZ = new TH2D("hZMap", "Flatness Map;X [mm];Y [mm];Z [mm]",
+                      grid.Nx, grid.xMin - grid.dx/2, grid.xMax + grid.dx/2,
+                      grid.Ny, grid.yMin - grid.dy/2, grid.yMax + grid.dy/2);
+
+        std::map<std::pair<int,int>, std::vector<double>> bins;
+
+        for (const auto& p : points) {
+            int ix = static_cast<int>(std::round((p.coords[1] - grid.xMin) / grid.dx));
+            int iy = static_cast<int>(std::round((p.coords[2] - grid.yMin) / grid.dy));
+            bins[{ix, iy}].push_back(p.coords[3]);
+        }
+
+        for (const auto& [idx, zs] : bins) {
+            double zmean = std::accumulate(zs.begin(), zs.end(), 0.0) / zs.size();
+            hZ->SetBinContent(idx.first + 1, idx.second + 1, zmean);
+        }
+		hZ->SetStats(0);  // disables stats box for this histogram
+        hZ->Write();
+    } else {
+        std::cerr << "Warning: points are not on a regular grid — skipping flatness map.\n";
     }
-    
 
-///////////////////////////////////////
-/// Display histograms
-//////////////////////////////////////
+    // 8. Display results
+    int canvasWidth = 800, canvasHeight = 600;
 
-	// One canvas per 1D histogram
-	
-	n = (int)hists.size();
-	
-	std::vector<TCanvas*> canvases;
-	int canvasWidth = 800;  
-	int canvasHeight = 600;  
+    for (size_t i = 0; i < hists.size(); ++i) {
+        std::string cname = "cHist_" + std::to_string(i + 1);
+        TCanvas *c = new TCanvas(cname.c_str(), hists[i]->GetTitle(), 50 + i * 30, 50 + i * 30,
+                                 canvasWidth, canvasHeight);
+        c->Connect("Closed()", "TApplication", gApplication, "Terminate()");
+        hists[i]->Draw();
+        c->Update();
+    }
 
-	for (int i = 0; i < n; ++i) {
-		std::string cname = "c1D_" + std::to_string(i+1);
-		std::string ctitle = "Histogram of coordinate " + std::to_string(i+1);
+    TCanvas *c2 = new TCanvas("c2", "2D Scatter (Y vs X)", 900, 150, 700, 600);
+    c2->Connect("Closed()", "TApplication", gApplication, "Terminate()");
+    g2->SetMarkerStyle(20);
+    g2->SetMarkerSize(0.8);
+    g2->SetMarkerColor(kBlack);
+    g2->Draw("AP");
+    c2->Update();
 
-		int xPos = 50 + (i * 40);
-		int yPos = 50 + (i * 40);
-
-		TCanvas* c = new TCanvas(cname.c_str(), ctitle.c_str(),
-								 xPos, yPos, canvasWidth, canvasHeight);
-		
-		c->Connect("Closed()", "TApplication", gApplication, "Terminate()");
-
-		hists[i]->Draw();
-		c->Update();
-
-		canvases.push_back(c);
+    if (hZ) {
+        TCanvas *cMap = new TCanvas("cMap", "Flatness Map", 1650, 150, 800, 650);
+        gStyle->SetPalette(kBird);
+        cMap->SetLeftMargin(0.15);
+        cMap->SetRightMargin(0.18);
+        cMap->SetBottomMargin(0.12);
+        cMap->SetTopMargin(0.08);
+        hZ->SetStats(0);
+        hZ->GetXaxis()->SetTitleOffset(1.2);
+        hZ->GetYaxis()->SetTitleOffset(1.6);
+        hZ->Draw("COLZ");
+        cMap->Update();
 	}
+	//------------------------------------------------------------------------------
+	// 9. Run ROOT GUI loop
+	//------------------------------------------------------------------------------
+	//
+	// Close the output file before entering the interactive ROOT GUI loop.
+	// Canvases remain accessible even after the file is closed.
+	//
 	
-// 8. Create a 2D scatter plot of Y vs. X for visualization.
-//      2D scatter plot using TGraph (safe for many points)
-//
-	// Make a TGraph with one point per entry
-	TGraph* g2 = new TGraph(points.size());
-	for (size_t i = 0; i < points.size(); ++i) {
-		if (points[i].coords.size() >= 3) {  // safety check
-			g2->SetPoint(i, points[i].coords[1], points[i].coords[2]);
-		}
-	}
-
-	// Optional: associate with current ROOT file for saving
-	g2->SetName("g2_xy");
-	g2->SetTitle("coords[2] vs coords[1]");
-	g2->Write(); // write to file
+	
+	std::cout << "\nHistograms written to " << outname << std::endl;
+	std::cout << "\nHit ctrl-c to exit" << std:: endl;
 	
 		
-// 9. Display histograms and scatter plots in ROOT canvases, and write all objects to file.
+	
+	// detach histograms from file so they survive after outfile.Close()
+	for (TH1D* hist : hists) {
+		hist->SetDirectory(nullptr);
+		hist->Write();
+	}	
+	// detach and write scatter plot
+	g2->Write();
 
-	// Display in a separate canvas
-	TCanvas* c2 = new TCanvas("c2", "2D Scatter", 600, 600);
-	c2->Connect("Closed()", "TApplication", gApplication, "Terminate()"); 
-	c2->SetWindowPosition(200, 200);
+	// write flatness map if present
+	if (hZ) {
+		hZ->SetDirectory(nullptr);
+		hZ->Write();
+	}
+		outfile.Close();
 
-	// Marker settings
-	g2->SetMarkerStyle(20);  // filled circle
-	g2->SetMarkerSize(0.8);
-	g2->SetMarkerColor(kBlack);
-
-	// Draw the points with axes
-	g2->Draw("AP"); // A = draw axes, P = points
-	c2->Update();
-
-// 10. Keep GUI open until user closes the ROOT windows.
-//    	actually you need to cntrl-c
-
-    app.Run();  
-    
-    
-// End of program. Histograms and graphs are written to 'output.root' for later inspection.
-   
-    outfile.Close();
-    std::cout << "Histograms written to " << outname << std::endl;
-
+	// Enter the ROOT GUI event loop — close all canvases or press Ctrl+C to exit.
+	
+	app.Run();
+	
     return 0;
-    
-}// end of main
-
-// End of program. Histograms and graphs are written to 'output.root' for later inspection.
-
+}
