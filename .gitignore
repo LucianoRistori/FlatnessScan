@@ -60,3 +60,21 @@ cmake-build-*/
 #*.xcodeproj/*
 #*.xcworkspace/*
 #*.xcuserdata/
+
+
+# Build and binary files
+flatnessScan
+testGridFinder
+*.o
+*.dSYM/
+
+# ROOT output
+*.root
+
+# macOS metadata
+.DS_Store
+
+# Large binary presentation files
+PlexiglassTest.key
+PlexiglassTest.key.pdf
+
