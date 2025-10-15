@@ -1,46 +1,114 @@
 # FlatnessScan
 
-**FlatnessScan** is a C++17 program for analyzing surface flatness from 3D measurement data.  
-It reads a CSV-like file of point coordinates, fits an optimal plane to the data, evaluates deviations,  
-and visualizes the results as histograms and color maps using the ROOT framework.
+**Version:** 1.1.0 — *October 2025*  
+**Author:** Luciano Ristori  
 
 ---
 
-## ✳️ Overview
+## 🧭 Overview
 
-The program performs the following tasks:
+**FlatnessScan** is a ROOT-based analysis tool for evaluating the flatness of measured 3D surfaces.  
+It reads point coordinate data, fits an optimal plane using ROOT’s Minuit2 minimizer, and produces detailed histograms, residuals, and 2D visualizations of the surface flatness.
 
-1. **Reads** a text file with four columns:  
-   `index, X, Y, Z` — where `X, Y, Z` are coordinates in millimeters.
-   Additional numbers on the same line are ignored.
-   Any text is ignored
-2. **Fits** a best-fit plane using ROOT’s Minuit2 minimizer.
-3. **Computes** the flatness standard deviation and plane coefficients.
-4. **Produces**:
-   - 1D histograms for X, Y, Z, and residuals from the plane fit.  
-   - A 2D scatter plot of Y vs X.  
-   - A **colored flatness map** (Z as color) if the (X,Y) points form a regular grid.
-5. **Saves** all histograms and graphs to a ROOT file.
+The program was designed to help characterize and visualize mechanical surface deviations with micrometer precision.
 
 ---
 
-## 🧩 Input Format
+## 🚀 Features
 
-Example of a valid input file:
-(only the first four columns are actually used)
+- **Robust plane fitting**
+  - Uses ROOT’s Minuit2 minimizer to determine optimal plane coefficients.
+  - Reports χ², standard deviation, and plane-normal normalization.
 
-STATS
-PLANK SCAN
-07/16/25 14:39:46 
-Layer3ScanTopV1.RTN
+- **Improved histogram handling**
+  - Histograms remain interactive and stable after the ROOT file is closed.
+  - Fully functional on macOS and Linux.
 
-1,10,10,0.001,0.004,0.009,1
-2,41.111,10,0.006,0.004,0.009,1
-3,72.222,10,0.024,0.004,0.009,1
-4,103.333,10,-0.006,0.004,0.009,1
-5,134.444,10,-0.03,0.004,0.009,1
-6,165.556,10,-0.01,0.004,0.009,1
-7,196.667,10,0.003,0.004,0.009,1
-8,227.778,10,-0.011,0.004,0.009,1
-9,258.889,10,0.033,0.004,0.009,1
-.......
+- **Automatic grid detection**
+  - Integrated `GridFinder` module identifies regular Nx×Ny point grids.
+  - Generates a color-coded 2D “Flatness Map” when the grid is regular.
+
+- **Flexible output**
+  - Optional output file name (adds `.root` automatically if missing).
+  - Saves all histograms, scatter plots, and metadata tags.
+
+- **Readable, modular source code**
+  - Extensive comments and clear separation between reading, fitting, plotting, and saving.
+
+---
+
+## 🧪 Example Usage
+
+```bash
+./flatnessScan my_points.csv results.root
+```
+
+**Input format:**
+```
+index   X   Y   Z
+```
+Each line contains a point index and its X, Y, Z coordinates in millimeters.
+
+---
+
+## 🛠️ Building the Program
+
+You need the **ROOT framework** (https://root.cern/) installed and configured.  
+Then compile with:
+
+```bash
+clang++ -std=c++17 flatnessScan.cpp Points.cpp `root-config --cflags --libs` -o flatnessScan
+```
+
+or simply run:
+
+```bash
+make
+```
+
+(Provided that the included `Makefile` is configured for your ROOT installation.)
+
+---
+
+## 📦 Repository Contents
+
+| File | Description |
+|------|--------------|
+| `flatnessScan.cpp` | Main program |
+| `Points.cpp` / `Points.h` | Point reading utilities |
+| `GridFinder.h` | Grid detection logic |
+| `Makefile` | Build configuration |
+| `README.md` | This documentation |
+| Example `.csv` files | Sample datasets |
+
+---
+
+## 📊 Output
+
+- ROOT file containing:
+  - X, Y, Z coordinate histograms  
+  - Plane deviation histogram  
+  - Y–vs–X scatter plot  
+  - Optional 2D “Flatness Map”  
+- Console summary of fit parameters and flatness statistics  
+- Interactive canvases (close windows or press Ctrl-C to exit)
+
+---
+
+## 🏷️ Version History
+
+| Version | Date | Notes |
+|----------|------|-------|
+| **1.1.0** | October 2025 | First stable release with GridFinder integration and improved histogram handling. |
+
+---
+
+## 📜 License
+
+© 2025 Luciano Ristori  
+This project is provided for research and educational use.  
+You may modify and redistribute it freely, provided attribution is maintained.
+
+---
+
+*For more details, see the [Releases](https://github.com/LucianoRistori/FlatnessScan/releases) section on GitHub.*
