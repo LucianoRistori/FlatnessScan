@@ -55,6 +55,9 @@
 // Date: October 2025
 //------------------------------------------------------------------------------
 
+#define FLATNESSSCAN_VERSION "v1.0"
+
+
 // ROOT and standard headers
 #include <iostream>
 #include <fstream>
@@ -167,7 +170,10 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	
-	std::cout << "\nFlatnessScan version " << FLATNESS_SCAN_VERSION << std::endl;
+	cout << "\n====================================\n";
+	cout << " FlatnessScan " << FLATNESSSCAN_VERSION << " — Luciano Ristori\n";
+	cout << " Built: " << __DATE__ << " " << __TIME__ << endl;
+	cout << "====================================\n";
 
 	std::string filename = argv[1];
 	std::string outname = (argc >= 3) ? argv[2] : "output.root";
