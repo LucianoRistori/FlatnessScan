@@ -6,8 +6,8 @@
 # Compiler and ROOT configuration
 #------------------------------------------------------------
 CXX      := clang++
-CXXFLAGS := -O2 -Wall -Wextra -Wno-cpp -stdlib=libc++ -mmacosx-version-min=13.0 -std=c++17
-CXXFLAGS += -Wno-c++17-extensions
+CXXFLAGS := -O2 -Wall -Wextra -Wno-cpp -stdlib=libc++ -mmacosx-version-min=13.0 -std=c++17 
+CXXFLAGS += -Wno-c++17-extensions -I../common
 ROOTCFLAGS := $(shell root-config --cflags)
 ROOTLIBS   := $(shell root-config --libs)
 LDFLAGS := -pthread -lm -ldl -Wl,-rpath,/Applications/root/lib -std=c++17
@@ -16,7 +16,7 @@ LDFLAGS := -pthread -lm -ldl -Wl,-rpath,/Applications/root/lib -std=c++17
 INCLUDES := -I. -I/Applications/root/include
 
 # Source files
-SRC := flatnessScan.cpp Points.cpp
+SRC := flatnessScan.cpp ../common/Points.cpp
 OBJ := $(SRC:.cpp=.o)
 
 # Executables
@@ -64,3 +64,4 @@ clean:
 #       make testGridFinder
 #       make clean
 #============================================================
+
