@@ -192,7 +192,7 @@ int main(int argc, char *argv[]) {
 
     // 2. Read 3D points from input file
     
-    int n = 4;
+    int n = 3;
     std::vector<Point> points = readPoints(filename, n);
     if (points.empty()) {
         std::cerr << "No valid points found. Exiting." << std::endl;
@@ -200,9 +200,9 @@ int main(int argc, char *argv[]) {
     }
 
     for (auto &p : points) {
-        X.push_back(p.coords[1]);
-        Y.push_back(p.coords[2]);
-        Z.push_back(p.coords[3]);
+        X.push_back(p.coords[0]);
+        Y.push_back(p.coords[1]);
+        Z.push_back(p.coords[2]);
     }
 
     cout << "Read " << points.size() << " valid points." << endl;
@@ -264,6 +264,8 @@ int main(int argc, char *argv[]) {
             if (p.coords[i] < mins[i]) mins[i] = p.coords[i];
             if (p.coords[i] > maxs[i]) maxs[i] = p.coords[i];
         }
+        
+        cout<<"ranges done" << endl;
 
 	// 5. Create histograms for X, Y, Z, and residuals
 	//    → Provides coordinate distributions and flatness residuals for visualization
@@ -271,6 +273,8 @@ int main(int argc, char *argv[]) {
     TFile outfile(outname.c_str(), "RECREATE");
 
     std::vector<TH1D*> hists;
+    
+    cout << "n = " << n << endl;
 
     for (int i = 0; i < n; ++i) {
         double min = mins[i], max = maxs[i];
@@ -280,10 +284,9 @@ int main(int argc, char *argv[]) {
 
         std::string hname, htitle, xaxis;
         
-        if (i == 0) { hname = "hn"; htitle = "Point sequence number"; xaxis = "n"; }
-        else if (i == 1) { hname = "hX"; htitle = "X Coordinate Distribution"; xaxis = "X [mm]"; }
-        else if (i == 2) { hname = "hY"; htitle = "Y Coordinate Distribution"; xaxis = "Y [mm]"; }
-        else if (i == 3) { hname = "hZ"; htitle = "Z Coordinate Distribution"; xaxis = "Z [mm]"; }
+        if (i == 0) { hname = "hX"; htitle = "X Coordinate Distribution"; xaxis = "X [mm]"; }
+        else if (i == 1) { hname = "hY"; htitle = "Y Coordinate Distribution"; xaxis = "Y [mm]"; }
+        else if (i == 2) { hname = "hZ"; htitle = "Z Coordinate Distribution"; xaxis = "Z [mm]"; }
         else { hname = "hCoord" + std::to_string(i + 1); htitle = "Coordinate " + std::to_string(i + 1); xaxis = "Value"; }
 
         auto *h = new TH1D(hname.c_str(), htitle.c_str(),
@@ -292,9 +295,9 @@ int main(int argc, char *argv[]) {
         h->GetYaxis()->SetTitle("Counts");
         hists.push_back(h);
 
-		// For Z coordinate (i == 3), also create a second histogram
+		// For Z coordinate (i == 2), also create a second histogram
     	// to store residuals (deviations from the fitted 3D plane).
-        if (i == 3) {
+        if (i == 2) {
             auto *hDev = new TH1D("hDeviations", "Deviations from 3D Plane Fit",
                                   nBins, min - margin, max + margin);
             hDev->GetXaxis()->SetTitle("Residual [mm]");
@@ -302,12 +305,14 @@ int main(int argc, char *argv[]) {
             hists.push_back(hDev);
         }
     }
+    
+    cout << "histograms done" << endl;
 
     for (const auto &p : points) {
         for (int i = 0; i < n; ++i)
             hists[i]->Fill(p.coords[i]);
-        double delta = (ax*p.coords[1] + ay*p.coords[2] + az*(p.coords[3] + offset) - 1.0) * invModa;
-        hists[4]->Fill(delta);
+        	double delta = (ax*p.coords[0] + ay*p.coords[1] + az*(p.coords[2] + offset) - 1.0) * invModa;
+        	hists[3]->Fill(delta); 
     }
     
     // write code version to histogram file
@@ -321,7 +326,7 @@ int main(int argc, char *argv[]) {
     
     TGraph* g2 = new TGraph(points.size());
     for (size_t i = 0; i < points.size(); ++i)
-    g2->SetPoint(i, points[i].coords[1], points[i].coords[2]);
+    g2->SetPoint(i, points[i].coords[0], points[i].coords[1]);
     g2->SetName("g2_xy");
     g2->SetTitle("Y vs X");
     g2->Write();
@@ -331,7 +336,7 @@ int main(int argc, char *argv[]) {
     std::vector<std::pair<double,double>> xy;
     xy.reserve(points.size());
     for (const auto &p : points)
-        xy.emplace_back(p.coords[1], p.coords[2]);
+        xy.emplace_back(p.coords[0], p.coords[1]);
         
     // Analyze (X, Y) points to determine if they form a regular Nx×Ny grid.
 	// If yes, create a color-coded 2D histogram of Z values — the "flatness map".
@@ -347,9 +352,9 @@ int main(int argc, char *argv[]) {
         std::map<std::pair<int,int>, std::vector<double>> bins;
 
         for (const auto& p : points) {
-            int ix = static_cast<int>(std::round((p.coords[1] - grid.xMin) / grid.dx));
-            int iy = static_cast<int>(std::round((p.coords[2] - grid.yMin) / grid.dy));
-            bins[{ix, iy}].push_back(p.coords[3]);
+            int ix = static_cast<int>(std::round((p.coords[0] - grid.xMin) / grid.dx));
+            int iy = static_cast<int>(std::round((p.coords[1] - grid.yMin) / grid.dy));
+            bins[{ix, iy}].push_back(p.coords[2]);
         }
 
         for (const auto& [idx, zs] : bins) {

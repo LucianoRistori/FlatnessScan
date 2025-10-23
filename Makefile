@@ -16,11 +16,11 @@ LDFLAGS := -pthread -lm -ldl -Wl,-rpath,/Applications/root/lib -std=c++17
 INCLUDES := -I. -I/Applications/root/include
 
 # Source files
-SRC := flatnessScan.cpp ../common/Points.cpp
+SRC := FlatnessScan.cpp ../common/Points.cpp
 OBJ := $(SRC:.cpp=.o)
 
 # Executables
-EXE := flatnessScan
+EXE := flatnessscan
 TEST_EXE := testGridFinder
 
 #============================================================
