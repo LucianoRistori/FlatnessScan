@@ -1,47 +1,35 @@
-# ===============================================================
-# Makefile for FlatnessScan
+# ================================================================
+# FlatnessScan Makefile
 # Author: Luciano Ristori
-# Updated: October 2025
-#
 # Description:
-#   Builds the FlatnessScan program using the shared common/ module.
-#   Dependencies: ROOT framework (macOS build via clang++).
-# ===============================================================
+#   Analyzes measured surface points, fits a plane, computes deviations,
+#   and generates ROOT histograms and plots.
+# ================================================================
 
-# ---- Compiler and Flags ----
-CXX      := clang++
-CXXFLAGS := -O2 -Wall -Wextra -Wno-cpp -stdlib=libc++ -mmacosx-version-min=13.0 \
-            -std=c++17 -Wno-c++17-extensions -pthread -m64
-INCLUDES := -I../common -I. -I/Applications/root/include
-LDFLAGS  := -L/Applications/root/lib -Wl,-rpath,/Applications/root/lib
-LIBS     := -lCore -lImt -lRIO -lNet -lHist -lGraf -lGraf3d -lGpad -lROOTVecOps \
-            -lTree -lTreePlayer -lRint -lPostscript -lMatrix -lPhysics -lMathCore \
-            -lThread -lMultiProc -lROOTDataFrame -lpthread -lm -ldl
+CXX       = clang++
+CXXFLAGS  = -O2 -Wall -Wextra -Wno-cpp -std=c++17 -stdlib=libc++ -pthread -m64 -mmacosx-version-min=13.0
 
-# ---- Targets ----
-TARGET    := flatnessscan
-OBJS      := FlatnessScan.o ../common/Points.o
+# Automatically query ROOT for include and library paths
+ROOTCFLAGS := $(shell root-config --cflags)
+ROOTLIBS   := $(shell root-config --libs)
 
-# ---- Default Rule ----
+INCLUDES   = -I../common -I.
+
+LDFLAGS    = -stdlib=libc++ -pthread -lm -ldl
+
+SRCS       = FlatnessScan.cpp ../common/Points.cpp
+OBJS       = $(SRCS:.cpp=.o)
+TARGET     = flatnessScan
+
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OBJS) -o $@ $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) $(OBJS) -o $@ $(ROOTLIBS) $(LDFLAGS)
 
-# ---- Pattern Rule for Compilation ----
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(ROOTCFLAGS) $(INCLUDES) -c $< -o $@
 
-../common/Points.o: ../common/Points.cpp ../common/Points.h
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c ../common/Points.cpp -o ../common/Points.o
-
-# ---- Cleaning ----
 clean:
 	@echo "Cleaning up..."
-	rm -f *.o ../common/Points.o $(TARGET)
+	rm -f $(OBJS) $(TARGET)
 	find . -name "*.dSYM" -type d -exec rm -rf {} +
-
-# ---- Convenience ----
-rebuild: clean all
-
-.PHONY: all clean rebuild
