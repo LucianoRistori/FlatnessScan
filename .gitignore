@@ -1,81 +1,51 @@
+# ============================================================
+# CMM tools — standard .gitignore template
+# ============================================================
+
+# --- Build artifacts ---
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+*.dSYM/
+
+# Tool executables (adjust name if needed)
+ExpansionScan
+CompareScan
+FlatnessScan
+OptimizePath
+AddDisplacedPoints
+
+# --- ROOT outputs ---
+*.root
+*.png
+*.pdf
+
+# --- Temporary / scratch files ---
+*~
+*.tmp
+*.bak
+.#*
+
 # --- macOS ---
 .DS_Store
 .AppleDouble
-.Spotlight-V100
-.Trashes
-Icon?
-._*
+.LSOverride
 
-# --- C/C++ build artifacts ---
-*.o
-*.obj
-*.lo
-*.la
-*.a
-*.so
-*.so.*
-*.dylib
-*.dll
-*.d
-*.gch
-*.pch
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
 
-# --- Executables / bundles ---
-*.exe
-*.out
-*.app
-*.dSYM/
-
-# --- Coverage / profiling ---
-*.gcno
-*.gcda
-*.gcov
-*.prof
-*.profraw
-*.profdata
-
-# --- CMake ---
+# --- CMake / build dirs (if ever used) ---
 build/
-build-*/
-CMakeCache.txt
-CMakeFiles/
 cmake-build-*/
 
-# --- Make ---
-*.dep
-
-# --- ROOT ---
-*.root
-*.pcm
-
-# --- IDEs / editors (uncomment if you use them) ---
-#.vscode/
-#.idea/
-#*.iml
-#*.swp
-#*~
-#*.code-workspace
-
-# --- Xcode (uncomment if you generate Xcode projects) ---
-#*.xcodeproj/*
-#*.xcworkspace/*
-#*.xcuserdata/
-
-
-# Build and binary files
-flatnessScan
-testGridFinder
-*.o
-*.dSYM/
-
-# ROOT output
-*.root
-
-# macOS metadata
-.DS_Store
-
-# Large binary presentation files
-PlexiglassTest.key
-PlexiglassTest.key.pdf
-
-flatnessScan
+# ============================================================
+# Notes:
+#  • Source code, Makefiles, README.md ARE tracked
+#  • Input data lives in Dropbox (not in repos)
+#  • Output files live under CMM_RESULTS (not tracked)
+# ============================================================
