@@ -1,35 +1,48 @@
-# ================================================================
-# FlatnessScan Makefile
-# Author: Luciano Ristori
-# Description:
-#   Analyzes measured surface points, fits a plane, computes deviations,
-#   and generates ROOT histograms and plots.
-# ================================================================
+#==============================================================================
+# Makefile for FlatnessScan
+#==============================================================================
 
-CXX       = clang++
-CXXFLAGS  = -O2 -Wall -Wextra -Wno-cpp -std=c++17 -stdlib=libc++ -pthread -m64 -mmacosx-version-min=13.0
+# Compiler
+CXX = clang++
 
-# Automatically query ROOT for include and library paths
+# Base compiler flags
+CXXFLAGS = -O2 -Wall -Wextra -Wno-cpp \
+           -std=c++17 -stdlib=libc++ \
+           -mmacosx-version-min=13.0 \
+           -pthread -m64
+
+# ROOT configuration
 ROOTCFLAGS := $(shell root-config --cflags)
 ROOTLIBS   := $(shell root-config --libs)
 
-INCLUDES   = -I../common -I.
+# Common module
+COMMON_DIR = ../common
+INCLUDES   = -I$(COMMON_DIR)
 
-LDFLAGS    = -stdlib=libc++ -pthread -lm -ldl
+# Sources
+SRCS = flatnessScan.cpp \
+       $(COMMON_DIR)/Points.cpp
 
-SRCS       = FlatnessScan.cpp ../common/Points.cpp
-OBJS       = $(SRCS:.cpp=.o)
-TARGET     = flatnessScan
+# Objects
+OBJS = $(SRCS:.cpp=.o)
 
+# Target
+TARGET = flatnessScan
+
+# Default rule
 all: $(TARGET)
 
+# Link
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) $(OBJS) -o $@ $(ROOTLIBS) $(LDFLAGS)
+	$(CXX) $(OBJS) $(ROOTLIBS) -o $(TARGET)
 
+# Compile
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(ROOTCFLAGS) $(INCLUDES) -c $< -o $@
 
+# Clean
 clean:
-	@echo "Cleaning up..."
 	rm -f $(OBJS) $(TARGET)
 	find . -name "*.dSYM" -type d -exec rm -rf {} +
+
+.PHONY: all clean

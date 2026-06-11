@@ -98,6 +98,11 @@ using std::vector;
 std::vector<double> X, Y, Z;
 double offset = 400.0;
 
+#include <cstdlib>
+#include <stdexcept>
+
+
+
 //------------------------------------------------------------------------------
 // Helper classes for formatted console output
 //------------------------------------------------------------------------------
@@ -176,8 +181,8 @@ int main(int argc, char *argv[]) {
 	cout << "====================================\n";
 
 	std::string filename = argv[1];
-	std::string outname = (argc >= 3) ? argv[2] : "output.root";
 
+	std::string outname = (argc >= 3) ? argv[2] : "output.root";
 	// Append ".root" if missing (case-insensitive)
 	if (outname.size() < 5 || 
 		(outname.substr(outname.size() - 5) != ".root" &&
@@ -399,6 +404,8 @@ int main(int argc, char *argv[]) {
         hZ->GetYaxis()->SetTitleOffset(1.6);
         hZ->Draw("COLZ");
         cMap->Update();
+        outfile.cd();
+    	cMap->Write("cMap");
 	}
 	//------------------------------------------------------------------------------
 	// 9. Run ROOT GUI loop
