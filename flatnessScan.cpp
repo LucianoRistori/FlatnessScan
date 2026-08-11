@@ -22,6 +22,11 @@
 //
 //        minimizing the total χ² = Σ [ (ax*X + ay*Y + az*(Z+offset) - 1)² / (ax²+ay²+az²) ]
 //
+//     3b. Fits a second plane -- the ASME Y14.5 "minimum zone" plane -- by
+//        minimizing the peak-to-valley span of the same residuals instead of
+//        their sum of squares. This is the standard engineering definition
+//        of flatness: the distance between the two parallel planes of
+//        minimum separation that contain all the measured points.
 //     4. Computes the resulting χ², standard deviation, and plane normal
 //        normalization (|a| and 1/|a|), and prints them to the console.
 //     5. Fills ROOT histograms for each coordinate (X, Y, Z) and for the
@@ -38,7 +43,8 @@
 //       index,  X,  Y,  Z
 //
 // Output:
-//   - Console summary of fit results (χ², plane coefficients, flatness).
+//   - Console summary of fit results (χ², plane coefficients, flatness),
+//     mirrored into a matching ".log" text file alongside the ROOT output.
 //   - ROOT file "output.root" containing histograms and scatter plots.
 //   - ROOT canvases displaying coordinate distributions and residuals.
 //
@@ -62,6 +68,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <streambuf>
 #include <string>
 #include <vector>
 #include <cstdlib>
@@ -88,7 +95,7 @@
 
 //------------------------------------------------------------------------------
 // Program version (update when functionality changes)
-const std::string FLATNESS_SCAN_VERSION = "1.1.0 (October 2025)";
+const std::string FLATNESS_SCAN_VERSION = "1.2.0 (August 2026)";
 
 
 using std::cout;
@@ -138,7 +145,34 @@ private:
 };
 
 //------------------------------------------------------------------------------
-// χ² Function for plane fitting
+// TeeBuf: a streambuf that duplicates every character written to it into two
+// underlying streambufs. Used to mirror std::cout / std::cerr into a log
+// file in addition to the console, without touching every individual
+// cout/cerr statement elsewhere in the program.
+//------------------------------------------------------------------------------
+
+class TeeBuf : public std::streambuf {
+public:
+    TeeBuf(std::streambuf* sb1, std::streambuf* sb2) : sb1_(sb1), sb2_(sb2) {}
+protected:
+    int overflow(int c) override {
+        if (c == EOF) return !EOF;
+        int r1 = sb1_->sputc(static_cast<char>(c));
+        int r2 = sb2_->sputc(static_cast<char>(c));
+        return (r1 == EOF || r2 == EOF) ? EOF : c;
+    }
+    int sync() override {
+        int r1 = sb1_->pubsync();
+        int r2 = sb2_->pubsync();
+        return (r1 == 0 && r2 == 0) ? 0 : -1;
+    }
+private:
+    std::streambuf* sb1_;
+    std::streambuf* sb2_;
+};
+
+//------------------------------------------------------------------------------
+// χ² Function for plane fitting (least-squares plane)
 //------------------------------------------------------------------------------
 
 double chi2Func(const double *x) {
@@ -153,6 +187,30 @@ double chi2Func(const double *x) {
 }
 
 //------------------------------------------------------------------------------
+// Minimum-zone (Chebyshev) objective for the standard ASME Y14.5 flatness
+// definition. For a candidate plane, this is the peak-to-valley span of the
+// signed perpendicular distances of all points from that plane. Minimizing
+// this over the plane parameters finds the orientation for which the two
+// parallel planes containing all the points are closest together; that
+// minimum separation is the reported flatness value.
+//------------------------------------------------------------------------------
+
+double minimaxFunc(const double *x) {
+    double ax = x[0], ay = x[1], az = x[2];
+    double moda = std::sqrt(ax*ax + ay*ay + az*az);
+    if (moda < 1e-12) return std::numeric_limits<double>::max();
+
+    double dmax = std::numeric_limits<double>::lowest();
+    double dmin = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < X.size(); ++i) {
+        double delta = (ax*X[i] + ay*Y[i] + az*(Z[i] + offset) - 1.0) / moda;
+        if (delta > dmax) dmax = delta;
+        if (delta < dmin) dmin = delta;
+    }
+    return dmax - dmin;
+}
+
+//------------------------------------------------------------------------------
 // Main program
 //------------------------------------------------------------------------------
 
@@ -163,7 +221,8 @@ int main(int argc, char *argv[]) {
 //   ./flatnessScan input.csv [output.root]
 //
 //------------------------------------------------------------------------------
-// 1. Parse command-line arguments and initialize ROOT application.
+// 1. Parse command-line arguments, set up the log file, and initialize the
+//    ROOT application.
 //------------------------------------------------------------------------------
 ////
 // If no output file is specified, defaults to "output.root".
@@ -174,21 +233,62 @@ int main(int argc, char *argv[]) {
 		std::cerr << "Usage: " << argv[0] << " input.csv [output.root]" << std::endl;
 		return 1;
 	}
-	
-	cout << "\n====================================\n";
-	cout << " FlatnessScan " << FLATNESSSCAN_VERSION << " — Luciano Ristori\n";
-	cout << " Built: " << __DATE__ << " " << __TIME__ << endl;
-	cout << "====================================\n";
 
 	std::string filename = argv[1];
 
-	std::string outname = (argc >= 3) ? argv[2] : "output.root";
+	// Default output basename tracks the input file: strip any directory
+	// path and extension from the input filename, then find the first
+	// unused sequential suffix "_N" so repeated runs on the same input
+	// don't overwrite each other's results. An explicit output name on
+	// the command line (argv[2]) still overrides this entirely.
+	std::string inputBase = filename;
+	size_t slashPos = inputBase.find_last_of("/\\");
+	if (slashPos != std::string::npos) inputBase = inputBase.substr(slashPos + 1);
+	size_t dotPos = inputBase.find_last_of('.');
+	if (dotPos != std::string::npos) inputBase = inputBase.substr(0, dotPos);
+
+	std::string outname;
+	if (argc >= 3) {
+		outname = argv[2];
+	} else {
+		int runN = 1;
+		std::string candidateRoot, candidateLog;
+		while (true) {
+			candidateRoot = inputBase + "_" + std::to_string(runN) + ".root";
+			candidateLog  = inputBase + "_" + std::to_string(runN) + ".log";
+			std::ifstream testRoot(candidateRoot.c_str());
+			std::ifstream testLog(candidateLog.c_str());
+			if (!testRoot.good() && !testLog.good()) break;
+			++runN;
+		}
+		outname = candidateRoot;
+	}
 	// Append ".root" if missing (case-insensitive)
-	if (outname.size() < 5 || 
+	if (outname.size() < 5 ||
 		(outname.substr(outname.size() - 5) != ".root" &&
 		 outname.substr(outname.size() - 5) != ".ROOT")) {
 		outname += ".root";
 	}
+
+	// Derive a matching log file name (same base name, ".log" extension) and
+	// mirror everything written to std::cout / std::cerr into it, so every
+	// run leaves a complete text record alongside the ROOT output file.
+	std::string logname = outname.substr(0, outname.size() - 5) + ".log";
+	std::ofstream logFile(logname.c_str());
+	if (!logFile) {
+		std::cerr << "Warning: could not open log file \"" << logname
+		          << "\" -- continuing without a log file." << std::endl;
+	}
+	TeeBuf teeOutBuf(std::cout.rdbuf(), logFile.rdbuf());
+	TeeBuf teeErrBuf(std::cerr.rdbuf(), logFile.rdbuf());
+	std::streambuf* origCoutBuf = std::cout.rdbuf(&teeOutBuf);
+	std::streambuf* origCerrBuf = std::cerr.rdbuf(&teeErrBuf);
+
+	cout << "\n====================================\n";
+	cout << " FlatnessScan " << FLATNESSSCAN_VERSION << " — Luciano Ristori\n";
+	cout << " Built: " << __DATE__ << " " << __TIME__ << endl;
+	cout << "====================================\n";
+	cout << "Log file: " << logname << endl;
 
 	// Initialize ROOT GUI
 	TApplication app("app", &argc, argv);
@@ -196,7 +296,7 @@ int main(int argc, char *argv[]) {
 	TH1::AddDirectory(kTRUE);
 
     // 2. Read 3D points from input file
-    
+
     int n = 3;
     std::vector<Point> points = readPoints(filename, n);
     if (points.empty()) {
@@ -212,8 +312,8 @@ int main(int argc, char *argv[]) {
 
     cout << "Read " << points.size() << " valid points." << endl;
 
-    // 3. Fit a 3D plane using Minuit2
-    
+    // 3. Fit a 3D plane using Minuit2 (least-squares plane)
+
     cout << "\nFitting 3D plane..." << endl;
     ROOT::Math::Minimizer* min =
         ROOT::Math::Factory::CreateMinimizer("Minuit2", "");
@@ -260,8 +360,45 @@ int main(int argc, char *argv[]) {
     cout << "\n|a| = " << moda << "   1/|a| = " << invModa << " [mm]" << endl;
     cout << "Offset: " << offset << " [mm]" << endl;
 
+    // 3b. Fit the ASME Y14.5 "minimum zone" plane and report the standard
+    //     flatness value. This is a second, independent minimization of the
+    //     same three plane parameters, seeded from the least-squares result,
+    //     but minimizing the peak-to-valley span of the residuals instead of
+    //     their sum of squares. No plots are produced for this -- the result
+    //     is a single number, printed to the console (and, via the tee above,
+    //     to the log file).
+
+    cout << "\nFitting minimum-zone plane (ASME Y14.5 flatness definition)..." << endl;
+    ROOT::Math::Minimizer* minMZ =
+        ROOT::Math::Factory::CreateMinimizer("Minuit2", "Simplex");
+
+    minMZ->SetMaxFunctionCalls(1000000);
+    minMZ->SetMaxIterations(1000);
+    minMZ->SetTolerance(0.001);
+    minMZ->SetPrintLevel(0);
+
+    ROOT::Math::Functor fMZ(&minimaxFunc, 3);
+    double stepMZ[3]     = {0.0001, 0.0001, 0.0001};
+    double variableMZ[3] = {ax, ay, az};   // seed from the least-squares plane
+    minMZ->SetFunction(fMZ);
+
+    minMZ->SetVariable(0, "ax", variableMZ[0], stepMZ[0]);
+    minMZ->SetVariable(1, "ay", variableMZ[1], stepMZ[1]);
+    minMZ->SetVariable(2, "az", variableMZ[2], stepMZ[2]);
+    minMZ->Minimize();
+
+    double flatness = minMZ->MinValue();  // peak-to-valley span at the optimum [mm]
+
+    {
+        FloatingPointPrecision fpp(cout, 4);
+        cout << "\n----------------------------------\n";
+        cout << "  Flatness (ASME Y14.5 minimum-zone method)\n";
+        cout << "  Flatness = " << flatness << " mm  (" << flatness * 1000.0 << " µm)\n";
+        cout << "----------------------------------\n";
+    }
+
     // 4. Determine coordinate ranges
-    
+
     std::vector<double> mins(n, std::numeric_limits<double>::max());
     std::vector<double> maxs(n, std::numeric_limits<double>::lowest());
     for (const auto &p : points)
@@ -269,7 +406,7 @@ int main(int argc, char *argv[]) {
             if (p.coords[i] < mins[i]) mins[i] = p.coords[i];
             if (p.coords[i] > maxs[i]) maxs[i] = p.coords[i];
         }
-        
+
         cout<<"ranges done" << endl;
 
 	// 5. Create histograms for X, Y, Z, and residuals
@@ -278,7 +415,7 @@ int main(int argc, char *argv[]) {
     TFile outfile(outname.c_str(), "RECREATE");
 
     std::vector<TH1D*> hists;
-    
+
     cout << "n = " << n << endl;
 
     for (int i = 0; i < n; ++i) {
@@ -288,7 +425,7 @@ int main(int argc, char *argv[]) {
         int nBins = static_cast<int>((max - min + 2 * margin) * 1000 + 0.5);
 
         std::string hname, htitle, xaxis;
-        
+
         if (i == 0) { hname = "hX"; htitle = "X Coordinate Distribution"; xaxis = "X [mm]"; }
         else if (i == 1) { hname = "hY"; htitle = "Y Coordinate Distribution"; xaxis = "Y [mm]"; }
         else if (i == 2) { hname = "hZ"; htitle = "Z Coordinate Distribution"; xaxis = "Z [mm]"; }
@@ -310,25 +447,25 @@ int main(int argc, char *argv[]) {
             hists.push_back(hDev);
         }
     }
-    
+
     cout << "histograms done" << endl;
 
     for (const auto &p : points) {
         for (int i = 0; i < n; ++i)
             hists[i]->Fill(p.coords[i]);
         	double delta = (ax*p.coords[0] + ay*p.coords[1] + az*(p.coords[2] + offset) - 1.0) * invModa;
-        	hists[3]->Fill(delta); 
+        	hists[3]->Fill(delta);
     }
-    
+
     // write code version to histogram file
-    
+
     TNamed versionTag("FlatnessScanVersion", FLATNESS_SCAN_VERSION.c_str());
 	versionTag.Write();
 
     for (auto h : hists) h->Write();
 
     // 6. 2D Scatter plot of Y vs X
-    
+
     TGraph* g2 = new TGraph(points.size());
     for (size_t i = 0; i < points.size(); ++i)
     g2->SetPoint(i, points[i].coords[0], points[i].coords[1]);
@@ -337,12 +474,12 @@ int main(int argc, char *argv[]) {
     g2->Write();
 
     // 7. Flatness color map if grid is regular
-    
+
     std::vector<std::pair<double,double>> xy;
     xy.reserve(points.size());
     for (const auto &p : points)
         xy.emplace_back(p.coords[0], p.coords[1]);
-        
+
     // Analyze (X, Y) points to determine if they form a regular Nx×Ny grid.
 	// If yes, create a color-coded 2D histogram of Z values — the "flatness map".
 
@@ -393,22 +530,22 @@ int main(int argc, char *argv[]) {
     c2->Update();
 
     if (hZ) {
-    
-    
+
+
     double xrange = grid.xMax - grid.xMin;
 	double yrange = grid.yMax - grid.yMin;
-	
+
 	int width = 800;
 	int height = 800;
-	
+
 	if(xrange > yrange) height = static_cast<int>(width * yrange/xrange);
 		else            width = static_cast<int>(height * xrange/yrange);
-		
+
 	TCanvas *cMap = new TCanvas("cMap","Flatness Map",
                             1650,150,width,height);
-    
-    
-    
+
+
+
         //TCanvas *cMap = new TCanvas("cMap", "Flatness Map", 1650, 150, 800, 650);
         gStyle->SetPalette(kBird);
         cMap->SetLeftMargin(0.15);
@@ -418,9 +555,9 @@ int main(int argc, char *argv[]) {
         hZ->SetStats(0);
         hZ->GetXaxis()->SetTitleOffset(1.2);
         hZ->GetYaxis()->SetTitleOffset(1.6);
-        
+
         gPad->SetFixedAspectRatio();
-        
+
         hZ->Draw("COLZ");
         cMap->Update();
         outfile.cd();
@@ -433,18 +570,19 @@ int main(int argc, char *argv[]) {
 	// Close the output file before entering the interactive ROOT GUI loop.
 	// Canvases remain accessible even after the file is closed.
 	//
-	
-	
+
+
 	std::cout << "\nHistograms written to " << outname << std::endl;
+	std::cout << "Log written to " << logname << std::endl;
 	std::cout << "\nHit ctrl-c to exit" << std:: endl;
-	
-		
-	
+
+
+
 	// detach histograms from file so they survive after outfile.Close()
 	for (TH1D* hist : hists) {
 		hist->SetDirectory(nullptr);
 		//hist->Write();
-	}	
+	}
 	// detach and write scatter plot
 	g2->Write();
 
@@ -456,8 +594,13 @@ int main(int argc, char *argv[]) {
 		outfile.Close();
 
 	// Enter the ROOT GUI event loop — close all canvases or press Ctrl+C to exit.
-	
+
 	app.Run();
-	
+
+	// Restore the original stream buffers (reached only if all canvases are
+	// closed normally rather than via Ctrl+C).
+	std::cout.rdbuf(origCoutBuf);
+	std::cerr.rdbuf(origCerrBuf);
+
     return 0;
 }
