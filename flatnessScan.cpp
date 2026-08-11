@@ -393,7 +393,23 @@ int main(int argc, char *argv[]) {
     c2->Update();
 
     if (hZ) {
-        TCanvas *cMap = new TCanvas("cMap", "Flatness Map", 1650, 150, 800, 650);
+    
+    
+    double xrange = grid.xMax - grid.xMin;
+	double yrange = grid.yMax - grid.yMin;
+	
+	int width = 800;
+	int height = 800;
+	
+	if(xrange > yrange) height = static_cast<int>(width * yrange/xrange);
+		else            width = static_cast<int>(height * xrange/yrange);
+		
+	TCanvas *cMap = new TCanvas("cMap","Flatness Map",
+                            1650,150,width,height);
+    
+    
+    
+        //TCanvas *cMap = new TCanvas("cMap", "Flatness Map", 1650, 150, 800, 650);
         gStyle->SetPalette(kBird);
         cMap->SetLeftMargin(0.15);
         cMap->SetRightMargin(0.18);
@@ -402,6 +418,9 @@ int main(int argc, char *argv[]) {
         hZ->SetStats(0);
         hZ->GetXaxis()->SetTitleOffset(1.2);
         hZ->GetYaxis()->SetTitleOffset(1.6);
+        
+        gPad->SetFixedAspectRatio();
+        
         hZ->Draw("COLZ");
         cMap->Update();
         outfile.cd();
@@ -424,7 +443,7 @@ int main(int argc, char *argv[]) {
 	// detach histograms from file so they survive after outfile.Close()
 	for (TH1D* hist : hists) {
 		hist->SetDirectory(nullptr);
-		hist->Write();
+		//hist->Write();
 	}	
 	// detach and write scatter plot
 	g2->Write();
@@ -432,7 +451,7 @@ int main(int argc, char *argv[]) {
 	// write flatness map if present
 	if (hZ) {
 		hZ->SetDirectory(nullptr);
-		hZ->Write();
+		//hZ->Write();
 	}
 		outfile.Close();
 
