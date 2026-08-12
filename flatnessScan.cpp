@@ -45,8 +45,18 @@
 // Output:
 //   - Console summary of fit results (χ², plane coefficients, flatness),
 //     mirrored into a matching ".log" text file alongside the ROOT output.
-//   - ROOT file "output.root" containing histograms and scatter plots.
+//   - ROOT file (histograms and scatter plots) plus the matching ".log" file.
+//   - PDF snapshot of the deviations-from-fit histogram ("..._deviations.pdf").
+//   - PDF snapshot of the 2D flatness color map, with its color-scale legend
+//     ("..._flatnessMap.pdf"; only produced when the (X,Y) points form a
+//     regular grid).
 //   - ROOT canvases displaying coordinate distributions and residuals.
+//   - Unless an explicit output name is given, each run gets its own fresh
+//     subfolder named after the input file, with a sequential number on the
+//     FOLDER (not the files): "myPoints.csv" -> "myPoints_1/myPoints.root"
+//     + "myPoints_1/myPoints.log" + "myPoints_1/myPoints_deviations.pdf"
+//     + "myPoints_1/myPoints_flatnessMap.pdf" on the first run,
+//     "myPoints_2/..." on the next, and so on.
 //
 // Usage example:
 //   $ ./flatnessScan my_points.csv
@@ -75,6 +85,7 @@
 #include <limits>
 #include <iomanip>
 #include <cmath>
+#include <filesystem>
 
 #include "TFile.h"
 #include "TH1D.h"
@@ -95,7 +106,7 @@
 
 //------------------------------------------------------------------------------
 // Program version (update when functionality changes)
-const std::string FLATNESS_SCAN_VERSION = "1.2.0 (August 2026)";
+const std::string FLATNESS_SCAN_VERSION = "1.4.0 (August 2026)";
 
 
 using std::cout;
@@ -237,31 +248,44 @@ int main(int argc, char *argv[]) {
 	std::string filename = argv[1];
 
 	// Default output basename tracks the input file: strip any directory
-	// path and extension from the input filename, then find the first
-	// unused sequential suffix "_N" so repeated runs on the same input
-	// don't overwrite each other's results. An explicit output name on
-	// the command line (argv[2]) still overrides this entirely.
+	// path and extension from the input filename. An explicit output name
+	// on the command line (argv[2]) still overrides everything below.
+	//
+	// Every run is collected into its own fresh subfolder named after the
+	// input file, created alongside it -- the SEQUENTIAL NUMBER is on the
+	// folder, not on the files inside it (e.g. input "myPoints.csv"
+	// produces "myPoints_1/myPoints.root" + "myPoints_1/myPoints.log" on
+	// the first run, "myPoints_2/myPoints.root" + "myPoints_2/myPoints.log"
+	// on the next, and so on).
 	std::string inputBase = filename;
+	std::string inputDir;  // directory the input file lives in, including trailing slash (may be empty)
 	size_t slashPos = inputBase.find_last_of("/\\");
-	if (slashPos != std::string::npos) inputBase = inputBase.substr(slashPos + 1);
+	if (slashPos != std::string::npos) {
+		inputDir = inputBase.substr(0, slashPos + 1);
+		inputBase = inputBase.substr(slashPos + 1);
+	}
 	size_t dotPos = inputBase.find_last_of('.');
 	if (dotPos != std::string::npos) inputBase = inputBase.substr(0, dotPos);
 
+	// outDir holds the directory all outputs for this run land in (the
+	// fresh numbered subfolder in the default case, or whatever directory
+	// the explicit output name points at). Used later to place the PDF
+	// snapshots of the deviations histogram and the flatness map.
 	std::string outname;
+	std::string outDir;
 	if (argc >= 3) {
 		outname = argv[2];
+		size_t outSlash = outname.find_last_of("/\\");
+		outDir = (outSlash != std::string::npos) ? outname.substr(0, outSlash + 1) : "";
 	} else {
 		int runN = 1;
-		std::string candidateRoot, candidateLog;
 		while (true) {
-			candidateRoot = inputBase + "_" + std::to_string(runN) + ".root";
-			candidateLog  = inputBase + "_" + std::to_string(runN) + ".log";
-			std::ifstream testRoot(candidateRoot.c_str());
-			std::ifstream testLog(candidateLog.c_str());
-			if (!testRoot.good() && !testLog.good()) break;
+			outDir = inputDir + inputBase + "_" + std::to_string(runN) + "/";
+			if (!std::filesystem::exists(outDir)) break;
 			++runN;
 		}
-		outname = candidateRoot;
+		std::filesystem::create_directories(outDir);
+		outname = outDir + inputBase + ".root";
 	}
 	// Append ".root" if missing (case-insensitive)
 	if (outname.size() < 5 ||
@@ -512,6 +536,8 @@ int main(int argc, char *argv[]) {
     // 8. Display results
     int canvasWidth = 800, canvasHeight = 600;
 
+    std::string deviationsPdfPath, flatnessMapPdfPath;
+
     for (size_t i = 0; i < hists.size(); ++i) {
         std::string cname = "cHist_" + std::to_string(i + 1);
         TCanvas *c = new TCanvas(cname.c_str(), hists[i]->GetTitle(), 50 + i * 30, 50 + i * 30,
@@ -519,6 +545,12 @@ int main(int argc, char *argv[]) {
         c->Connect("Closed()", "TApplication", gApplication, "Terminate()");
         hists[i]->Draw();
         c->Update();
+
+        // Save a PDF snapshot of the deviations-from-fit histogram.
+        if (std::string(hists[i]->GetName()) == "hDeviations") {
+            deviationsPdfPath = outDir + inputBase + "_deviations.pdf";
+            c->SaveAs(deviationsPdfPath.c_str());
+        }
     }
 
     TCanvas *c2 = new TCanvas("c2", "2D Scatter (Y vs X)", 900, 150, 700, 600);
@@ -560,6 +592,12 @@ int main(int argc, char *argv[]) {
 
         hZ->Draw("COLZ");
         cMap->Update();
+
+        // Save a PDF snapshot of the 2D flatness map, including its color
+        // legend (drawn automatically by the "COLZ" draw option above).
+        flatnessMapPdfPath = outDir + inputBase + "_flatnessMap.pdf";
+        cMap->SaveAs(flatnessMapPdfPath.c_str());
+
         outfile.cd();
     	cMap->Write("cMap");
 	}
@@ -574,6 +612,10 @@ int main(int argc, char *argv[]) {
 
 	std::cout << "\nHistograms written to " << outname << std::endl;
 	std::cout << "Log written to " << logname << std::endl;
+	if (!deviationsPdfPath.empty())
+		std::cout << "Deviations histogram (PDF) written to " << deviationsPdfPath << std::endl;
+	if (!flatnessMapPdfPath.empty())
+		std::cout << "Flatness map (PDF) written to " << flatnessMapPdfPath << std::endl;
 	std::cout << "\nHit ctrl-c to exit" << std:: endl;
 
 
