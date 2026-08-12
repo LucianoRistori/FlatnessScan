@@ -48,6 +48,9 @@ cmake-build-*/
 *.root
 *.pcm
 
+# --- Run output logs (mirrored console output from flatnessScan) ---
+*.log
+
 # --- IDEs / editors (uncomment if you use them) ---
 #.vscode/
 #.idea/
