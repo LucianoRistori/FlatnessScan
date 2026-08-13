@@ -50,13 +50,18 @@
 //   - PDF snapshot of the 2D flatness color map, with its color-scale legend
 //     ("..._flatnessMap.pdf"; only produced when the (X,Y) points form a
 //     regular grid).
+//   - One-page presentation-ready summary image ("..._summary.png", 16:9)
+//     combining the best-fit plane residual RMS, the GD&T ASME Y14.5
+//     flatness result, the deviations histogram, and the 2D color map with
+//     its legend -- meant to be dropped straight into a PowerPoint or
+//     Keynote slide.
 //   - ROOT canvases displaying coordinate distributions and residuals.
 //   - Unless an explicit output name is given, each run gets its own fresh
 //     subfolder named after the input file, with a sequential number on the
 //     FOLDER (not the files): "myPoints.csv" -> "myPoints_1/myPoints.root"
 //     + "myPoints_1/myPoints.log" + "myPoints_1/myPoints_deviations.pdf"
-//     + "myPoints_1/myPoints_flatnessMap.pdf" on the first run,
-//     "myPoints_2/..." on the next, and so on.
+//     + "myPoints_1/myPoints_flatnessMap.pdf" + "myPoints_1/myPoints_summary.png"
+//     on the first run, "myPoints_2/..." on the next, and so on.
 //
 // Usage example:
 //   $ ./flatnessScan my_points.csv
@@ -86,11 +91,15 @@
 #include <iomanip>
 #include <cmath>
 #include <filesystem>
+#include <algorithm>
 
 #include "TFile.h"
 #include "TH1D.h"
 #include "TH2D.h"
 #include "TCanvas.h"
+#include "TPad.h"
+#include "TPaveText.h"
+#include "TLatex.h"
 #include "TApplication.h"
 #include "TROOT.h"
 #include "TGraph.h"
@@ -106,7 +115,7 @@
 
 //------------------------------------------------------------------------------
 // Program version (update when functionality changes)
-const std::string FLATNESS_SCAN_VERSION = "1.4.0 (August 2026)";
+const std::string FLATNESS_SCAN_VERSION = "1.5.4 (August 2026)";
 
 
 using std::cout;
@@ -442,11 +451,20 @@ int main(int argc, char *argv[]) {
 
     cout << "n = " << n << endl;
 
+    // Bin width for the Z-coordinate and residual/deviation histograms:
+    // the default formula below (used for X and Y) works out to a 1 micron
+    // bin, which is far finer than useful for a sub-millimeter surface
+    // measurement -- 5 microns per bin instead for those two.
+    const double coarseBinWidth = 0.005;  // mm (5 microns)
+
     for (int i = 0; i < n; ++i) {
         double min = mins[i], max = maxs[i];
         if (min == max) { min -= 0.5; max += 0.5; }
         double margin = 0.5 * (max - min);
         int nBins = static_cast<int>((max - min + 2 * margin) * 1000 + 0.5);
+        if (i == 2) {
+            nBins = std::max(1, static_cast<int>((max - min + 2 * margin) / coarseBinWidth + 0.5));
+        }
 
         std::string hname, htitle, xaxis;
 
@@ -463,6 +481,10 @@ int main(int argc, char *argv[]) {
 
 		// For Z coordinate (i == 2), also create a second histogram
     	// to store residuals (deviations from the fitted 3D plane).
+    	// Same axis range as the Z histogram above, but its own coarser
+    	// binning: the shared "nBins" above works out to a 1 micron bin
+    	// width, which is finer than useful for residuals typically
+    	// spanning tens of microns -- 5 microns per bin instead.
         if (i == 2) {
             auto *hDev = new TH1D("hDeviations", "Deviations from 3D Plane Fit",
                                   nBins, min - margin, max + margin);
@@ -601,6 +623,173 @@ int main(int argc, char *argv[]) {
         outfile.cd();
     	cMap->Write("cMap");
 	}
+
+	//------------------------------------------------------------------------------
+	// 8b. One-page summary slide -- the key results in a single image sized
+	//     for a presentation (16:9), ready to drop into PowerPoint or Keynote:
+	//       - best-fit plane residual RMS
+	//       - GD&T ASME Y14.5 flatness result
+	//       - deviations-from-fit histogram
+	//       - 2D flatness color map with its legend
+	//     Saved as a PNG (a plain raster image imports cleanly into both
+	//     PowerPoint and Keynote with no conversion surprises) at a
+	//     resolution well above screen size so text and plots stay crisp.
+	//------------------------------------------------------------------------------
+	{
+		std::string summaryPngPath = outDir + inputBase + "_summary.png";
+
+		TCanvas *cSummary = new TCanvas("cSummary", "FlatnessScan Summary", 1900, 100, 1920, 1080);
+		cSummary->SetFillColor(kWhite);
+		cSummary->cd();
+
+		// Shared left margin: the title, the histogram, and the map all line
+		// up against this same left edge.
+		const double leftNdc = 0.03;
+
+		// --- Title: a single left-aligned line along the very top. Text
+		//     uses a "precision 3" ROOT font (the trailing "3" in 63/43
+		//     below), which is a FIXED PIXEL SIZE independent of pad size --
+		//     unlike the previous TPaveText auto-fit boxes, this makes the
+		//     size directly and predictably tunable (just edit the pixel
+		//     numbers below), which is what "reduce it by ~2 points" needs.
+		//
+		// Note: these strings are drawn on the ROOT canvas itself, not
+		// printed to the terminal, so they use ROOT's own "#name" text-symbol
+		// codes (#sigma, #mum, ...) instead of raw UTF-8 characters -- ROOT's
+		// text rendering does not reliably interpret multi-byte UTF-8 and
+		// mangles it. Plain std::cout output elsewhere in this program is
+		// unaffected and keeps using the real UTF-8 characters, which render
+		// correctly in a terminal.
+		// Heap-allocated (not a stack local): cSummary stays open for
+		// interactive viewing during the GUI event loop below and may get
+		// repainted, so anything added to its pads must outlive this block --
+		// same reasoning as every other ROOT primitive in this file, which is
+		// why none of them are ever explicitly deleted.
+		TLatex *latTitle = new TLatex();
+		latTitle->SetNDC();
+		latTitle->SetTextFont(63);   // Helvetica bold, fixed pixel size
+		latTitle->SetTextSize(30);   // px -- reduced from the previous auto-fit size
+		latTitle->SetTextAlign(13);  // left, top
+		latTitle->DrawLatex(leftNdc, 0.985, ("FlatnessScan Summary  --  " + inputBase).c_str());
+
+		// --- Deviations-from-fit histogram, left-aligned under the title. ---
+		const double histX1 = leftNdc, histX2 = leftNdc + 0.40;
+		const double histRowY1 = 0.46, histRowY2 = 0.93;
+
+		TPad *padDev = new TPad("padDev", "padDev", histX1, histRowY1, histX2, histRowY2);
+		padDev->SetFillColor(kWhite);
+		padDev->Draw();
+		padDev->cd();
+		for (auto h : hists) {
+			if (std::string(h->GetName()) == "hDeviations") {
+				h->Draw();
+				break;
+			}
+		}
+
+		cSummary->cd();
+
+		// --- Results text, immediately to the right of the histogram, in a
+		//     smaller fixed pixel size than the title. ---
+		std::ostringstream ossRms, ossFlat;
+		ossRms.setf(std::ios::fixed);   ossRms   << std::setprecision(2);
+		ossFlat.setf(std::ios::fixed);  ossFlat  << std::setprecision(2);
+		ossRms  << "Best-fit plane residual RMS (#sigma):  " << (1000.0 * sqrt(minChi2 / X.size())) << " #mum";
+		ossFlat << "GD&T ASME Y14.5 Flatness:  " << (flatness * 1000.0) << " #mum";
+
+		const double resultsX = histX2 + 0.03;
+
+		TLatex *latRms = new TLatex();
+		latRms->SetNDC();
+		latRms->SetTextFont(43);   // Helvetica regular, fixed pixel size
+		latRms->SetTextSize(20);  // px -- smaller than the title
+		latRms->SetTextAlign(12); // left, vcenter
+		latRms->DrawLatex(resultsX, 0.72, ossRms.str().c_str());
+
+		TLatex *latFlat = new TLatex();
+		latFlat->SetNDC();
+		latFlat->SetTextFont(43);
+		latFlat->SetTextSize(20);
+		latFlat->SetTextAlign(12);
+		latFlat->DrawLatex(resultsX, 0.64, ossFlat.str().c_str());
+
+		cSummary->cd();
+
+		// --- 2D flatness color map with its legend, stacked below the
+		//     histogram and left-aligned to the same left edge. Unlike the
+		//     histogram, this plot's aspect ratio carries real information
+		//     (it mirrors the physical X/Y extent of the scanned surface),
+		//     so instead of just filling its allotted region it is sized to
+		//     match the data's (xrange / yrange) aspect ratio -- exactly
+		//     like the standalone flatness-map PDF above -- then placed flush
+		//     against the left border and vertically centered within the
+		//     region below the histogram. Only produced when the points form
+		//     a regular grid. The freed-up vertical space from shrinking the
+		//     title block above goes entirely into this region and the
+		//     histogram row above, growing both by the same proportion so
+		//     their relative sizing and alignment stay the same as before.
+		if (hZ) {
+			const double canvasWpx = 1920.0, canvasHpx = 1080.0;
+			// Region reserved for the map: left-aligned, bottom 46% of the canvas.
+			const double regionY1Ndc = 0.0, regionY2Ndc = 0.46;
+			const double regionWpx = canvasWpx;  // available width to fit within
+			const double regionHpx = (regionY2Ndc - regionY1Ndc) * canvasHpx;
+
+			double mapXrange = grid.xMax - grid.xMin;
+			double mapYrange = grid.yMax - grid.yMin;
+			double dataAspect = mapXrange / mapYrange;  // width / height
+
+			// "Contain" fit: shrink to the region's width or height,
+			// whichever binds first, preserving dataAspect exactly.
+			const double fitMargin = 0.92;  // small margin so it doesn't touch the region's edges
+			double availWpx = regionWpx * fitMargin;
+			double availHpx = regionHpx * fitMargin;
+			double mapWpx, mapHpx;
+			if (availWpx / availHpx > dataAspect) {
+				mapHpx = availHpx;
+				mapWpx = availHpx * dataAspect;
+			} else {
+				mapWpx = availWpx;
+				mapHpx = availWpx / dataAspect;
+			}
+
+			// Flush against the left border (not centered), vertically
+			// centered within the reserved region, then converted back to
+			// NDC coordinates on the full canvas.
+			double mapX1px = leftNdc * canvasWpx;
+			double mapY1px = regionY1Ndc * canvasHpx + (regionHpx - mapHpx) / 2.0;
+
+			double padX1 = mapX1px / canvasWpx;
+			double padX2 = (mapX1px + mapWpx) / canvasWpx;
+			double padY1 = mapY1px / canvasHpx;
+			double padY2 = (mapY1px + mapHpx) / canvasHpx;
+
+			TPad *padMap = new TPad("padMap", "padMap", padX1, padY1, padX2, padY2);
+			padMap->SetFillColor(kWhite);
+			padMap->Draw();
+			padMap->cd();
+			padMap->SetLeftMargin(0.15);
+			padMap->SetRightMargin(0.18);
+			padMap->SetBottomMargin(0.12);
+			padMap->SetTopMargin(0.08);
+			gPad->SetFixedAspectRatio();
+			hZ->Draw("COLZ");
+		} else {
+			cSummary->cd();
+			TLatex *latNoMap = new TLatex();
+			latNoMap->SetNDC();
+			latNoMap->SetTextFont(43);
+			latNoMap->SetTextSize(20);
+			latNoMap->SetTextAlign(12);
+			latNoMap->DrawLatex(leftNdc, 0.23, "No regular grid -- flatness map unavailable");
+		}
+
+		cSummary->cd();
+		cSummary->Update();
+		cSummary->SaveAs(summaryPngPath.c_str());
+		std::cout << "Summary slide (PNG) written to " << summaryPngPath << std::endl;
+	}
+
 	//------------------------------------------------------------------------------
 	// 9. Run ROOT GUI loop
 	//------------------------------------------------------------------------------
