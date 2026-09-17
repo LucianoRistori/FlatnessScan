@@ -92,6 +92,7 @@
 #include <cmath>
 #include <filesystem>
 #include <algorithm>
+#include <set>
 
 #include "TFile.h"
 #include "TH1D.h"
@@ -100,6 +101,7 @@
 #include "TPad.h"
 #include "TPaveText.h"
 #include "TLatex.h"
+#include "TBox.h"
 #include "TApplication.h"
 #include "TROOT.h"
 #include "TGraph.h"
@@ -115,7 +117,7 @@
 
 //------------------------------------------------------------------------------
 // Program version (update when functionality changes)
-const std::string FLATNESS_SCAN_VERSION = "1.5.4 (August 2026)";
+const std::string FLATNESS_SCAN_VERSION = "1.5.7 (August 2026)";
 
 
 using std::cout;
@@ -329,7 +331,8 @@ int main(int argc, char *argv[]) {
 	TH1::AddDirectory(kTRUE);
 
     // 2. Read 3D points from input file
-
+    
+	cout << "Data file: " << filename << endl;
     int n = 3;
     std::vector<Point> points = readPoints(filename, n);
     if (points.empty()) {
@@ -442,6 +445,24 @@ int main(int argc, char *argv[]) {
 
         cout<<"ranges done" << endl;
 
+    // Precompute the fit residuals (perpendicular distance of each point
+    // from the best-fit plane) up front, and their own min/max. The
+    // deviations histogram below is sized from THIS range, not from the
+    // Z coordinate's own range: Z can sit far from zero (e.g. a CMM
+    // reading around 6-7 mm), while the residuals are tiny deviations
+    // centered near zero, so reusing the Z axis range left every residual
+    // landing outside it -- a histogram that was 100% underflow.
+    std::vector<double> devVals;
+    devVals.reserve(points.size());
+    double devMin = std::numeric_limits<double>::max();
+    double devMax = std::numeric_limits<double>::lowest();
+    for (const auto &p : points) {
+        double d = (ax*p.coords[0] + ay*p.coords[1] + az*(p.coords[2] + offset) - 1.0) * invModa;
+        devVals.push_back(d);
+        if (d < devMin) devMin = d;
+        if (d > devMax) devMax = d;
+    }
+
 	// 5. Create histograms for X, Y, Z, and residuals
 	//    → Provides coordinate distributions and flatness residuals for visualization
 
@@ -479,15 +500,18 @@ int main(int argc, char *argv[]) {
         h->GetYaxis()->SetTitle("Counts");
         hists.push_back(h);
 
-		// For Z coordinate (i == 2), also create a second histogram
-    	// to store residuals (deviations from the fitted 3D plane).
-    	// Same axis range as the Z histogram above, but its own coarser
-    	// binning: the shared "nBins" above works out to a 1 micron bin
-    	// width, which is finer than useful for residuals typically
-    	// spanning tens of microns -- 5 microns per bin instead.
+		// For Z coordinate (i == 2), also create a second histogram to
+    	// store residuals (deviations from the fitted 3D plane) -- using
+    	// their OWN range (devMin/devMax, computed above), not the Z
+    	// coordinate's range used for "h" above: the two are unrelated
+    	// quantities and can sit nowhere near each other numerically.
         if (i == 2) {
+            double devMinL = devMin, devMaxL = devMax;
+            if (devMinL == devMaxL) { devMinL -= 0.5; devMaxL += 0.5; }
+            double devMargin = 0.5 * (devMaxL - devMinL);
+            int nBinsDev = std::max(1, static_cast<int>((devMaxL - devMinL + 2 * devMargin) / coarseBinWidth + 0.5));
             auto *hDev = new TH1D("hDeviations", "Deviations from 3D Plane Fit",
-                                  nBins, min - margin, max + margin);
+                                  nBinsDev, devMinL - devMargin, devMaxL + devMargin);
             hDev->GetXaxis()->SetTitle("Residual [mm]");
             hDev->GetYaxis()->SetTitle("Counts");
             hists.push_back(hDev);
@@ -496,11 +520,11 @@ int main(int argc, char *argv[]) {
 
     cout << "histograms done" << endl;
 
-    for (const auto &p : points) {
+    for (size_t idx = 0; idx < points.size(); ++idx) {
+        const auto &p = points[idx];
         for (int i = 0; i < n; ++i)
             hists[i]->Fill(p.coords[i]);
-        	double delta = (ax*p.coords[0] + ay*p.coords[1] + az*(p.coords[2] + offset) - 1.0) * invModa;
-        	hists[3]->Fill(delta);
+        	hists[3]->Fill(devVals[idx]);
     }
 
     // write code version to histogram file
@@ -532,17 +556,58 @@ int main(int argc, char *argv[]) {
     auto grid = GridFinder::analyze(xy);
     TH2D *hZ = nullptr;
 
+    // Grid cells that actually received at least one point -- GridFinder
+    // only requires the overall set of X's and set of Y's to be evenly
+    // spaced (see GridFinder.h), NOT that every row/column is complete, so
+    // a ragged/triangular scan shape is accepted and the Nx x Ny bounding
+    // box below will contain cells nothing ever landed in. Declared here
+    // (rather than inside the "if" block below, where the fill loop lives)
+    // so both places that draw hZ -- the standalone map and the summary
+    // slide -- can mark those cells the same way.
+    std::set<std::pair<int,int>> measuredCells;
+
+    // Paint every un-measured cell solid black, on top of whatever hZ's own
+    // "COLZ" draw already put there. hZ leaves those cells at their default
+    // content of 0, which (now that the map is colored by deviation, not
+    // raw Z) sits in the middle of the real color scale -- indistinguishable
+    // from "measured and genuinely flat" without this. Must be called with
+    // the correct pad already current (cd()'d) and after hZ->Draw("COLZ").
+    auto drawUnmeasuredMask = [&]() {
+        if (!hZ) return;
+        for (int ix = 0; ix < grid.Nx; ++ix) {
+            for (int iy = 0; iy < grid.Ny; ++iy) {
+                if (measuredCells.count({ix, iy})) continue;
+                double x1 = grid.xMin + (ix - 0.5) * grid.dx;
+                double x2 = grid.xMin + (ix + 0.5) * grid.dx;
+                double y1 = grid.yMin + (iy - 0.5) * grid.dy;
+                double y2 = grid.yMin + (iy + 0.5) * grid.dy;
+                TBox *box = new TBox(x1, y1, x2, y2);
+                box->SetFillColor(kBlack);
+                box->SetFillStyle(1001);
+                box->SetLineWidth(0);
+                box->Draw("same");
+            }
+        }
+    };
+
     if (grid.regularX && grid.regularY) {
-        hZ = new TH2D("hZMap", "Flatness Map;X [mm];Y [mm];Z [mm]",
+        // Color-code by DEVIATION from the fitted plane (devVals, computed
+        // above), not by the raw Z coordinate -- a "flatness map" should
+        // show how far each point sits from the reference plane, and the
+        // raw Z coordinate carries whatever baseline the CMM measured from
+        // (which can be far from zero), unrelated to that.
+        hZ = new TH2D("hZMap", "Flatness Map;X [mm];Y [mm];Deviation [mm]",
                       grid.Nx, grid.xMin - grid.dx/2, grid.xMax + grid.dx/2,
                       grid.Ny, grid.yMin - grid.dy/2, grid.yMax + grid.dy/2);
 
         std::map<std::pair<int,int>, std::vector<double>> bins;
 
-        for (const auto& p : points) {
+        for (size_t i = 0; i < points.size(); ++i) {
+            const auto& p = points[i];
             int ix = static_cast<int>(std::round((p.coords[0] - grid.xMin) / grid.dx));
             int iy = static_cast<int>(std::round((p.coords[1] - grid.yMin) / grid.dy));
-            bins[{ix, iy}].push_back(p.coords[2]);
+            bins[{ix, iy}].push_back(devVals[i]);
+            measuredCells.insert({ix, iy});
         }
 
         for (const auto& [idx, zs] : bins) {
@@ -613,6 +678,7 @@ int main(int argc, char *argv[]) {
         gPad->SetFixedAspectRatio();
 
         hZ->Draw("COLZ");
+        drawUnmeasuredMask();
         cMap->Update();
 
         // Save a PDF snapshot of the 2D flatness map, including its color
@@ -774,6 +840,7 @@ int main(int argc, char *argv[]) {
 			padMap->SetTopMargin(0.08);
 			gPad->SetFixedAspectRatio();
 			hZ->Draw("COLZ");
+			drawUnmeasuredMask();
 		} else {
 			cSummary->cd();
 			TLatex *latNoMap = new TLatex();
