@@ -29,8 +29,19 @@ OBJS = $(SRCS:.cpp=.o)
 # Target
 TARGET = flatnessScan
 
-# Default rule
+# Where the built executable gets installed after every build, so it's
+# always run from there (e.g. from a Dropbox working directory) rather
+# than from this source directory.
+BINDIR = $(HOME)/bin
+
+# Default rule: build, then install into BINDIR. "all" is declared .PHONY
+# below, so the install step runs on every "make" invocation, even when
+# $(TARGET) itself was already up to date.
 all: $(TARGET)
+	@mkdir -p $(BINDIR)
+	rm -f $(BINDIR)/$(TARGET)
+	cp $(TARGET) $(BINDIR)/$(TARGET)
+	@echo "Installed $(TARGET) -> $(BINDIR)/$(TARGET)"
 
 # Link
 $(TARGET): $(OBJS)
